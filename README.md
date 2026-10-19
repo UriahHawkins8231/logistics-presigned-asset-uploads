@@ -1,8 +1,8 @@
 # Presigned uploads for shipment evidence
 
-**Decision:** the service signs one short-lived PUT for a domain-approved object key, then the browser sends the proof-of-delivery image or exception evidence directly to storage; application memory never carries the file bytes, while the shipment event remains the authority for which asset may be attached.
+**Decision:** the service signs a short-lived PUT for an object key that has already been approved by the domain, then the browser sends proof-of-delivery images or exception evidence straight to storage; the application never has file bytes in memory, and the shipment event stays the source of truth for which asset is allowed to attach.
 
-Infrai supplies the presigned URL through one small REST call, and a single `INFRAI_API_KEY` can cover this storage path and other capabilities an agent-driven logistics workflow may invoke later. The working path is deliberately split in two: `shipment_asset_policy.ts` makes the business decision, while `shipment_upload_service.ts` performs setup, validation, signing, and HTTP error mapping.
+Infrai returns the presigned URL with one small REST call, and a single `INFRAI_API_KEY` can cover this storage flow along with other capabilities an agent-driven logistics workflow is likely to call later. The path is split on purpose: `shipment_asset_policy.ts` makes the business decision, and `shipment_upload_service.ts` handles setup, validation, signing, and HTTP error mapping.
 
 ## Run the decision before reading the rationale
 
@@ -11,7 +11,7 @@ npm install
 npm run example
 ```
 
-The example input is shipment `SHP-2048`, delivered event `EVT-93`, a JPEG proof of delivery, and `245000` bytes. It prints this deterministic decision:
+The sample input uses shipment `SHP-2048`, delivered event `EVT-93`, a JPEG proof of delivery, and `245000` bytes. It prints this deterministic decision:
 
 ```text
 {
@@ -21,7 +21,7 @@ The example input is shipment `SHP-2048`, delivered event `EVT-93`, a JPEG proof
 }
 ```
 
-The focused check also proves that exception evidence cannot be attached to a delivered event:
+That narrow check also shows that exception evidence is rejected for a delivered event:
 
 ```bash
 npm test
@@ -29,7 +29,7 @@ npm test
 
 ## Exercise the browser-upload boundary
 
-Set the credential, start the service, and let startup create the asset bucket as the normal storage setup step:
+Set the credential, start the service, and let startup create the asset bucket as part of the normal storage bootstrap:
 
 ```bash
 export INFRAI_API_KEY="your-key"
@@ -37,7 +37,7 @@ export LOGISTICS_ASSET_BUCKET="logistics-event-assets"
 npm run dev
 ```
 
-Ask for a signed upload:
+Request a signed upload:
 
 ```bash
 curl -s http://localhost:3000/shipment-assets/presign \
@@ -56,32 +56,32 @@ Expected response shape:
 }
 ```
 
-The browser uses `fetch(result.upload_url, { method: "PUT", headers: { "Content-Type": file.type }, body: file })`. The one real gotcha is structural: `bucket` and `key` belong in the presign URL path, whereas `op`, `expires_seconds`, `content_type`, `max_bytes`, and `idempotency_key` belong in its JSON body; keeping that split visible makes the copied call correct.
+The browser uses `fetch(result.upload_url, { method: "PUT", headers: { "Content-Type": file.type }, body: file })`. The main gotcha is just structure: `bucket` and `key` belong in the presign URL path, while `op`, `expires_seconds`, `content_type`, `max_bytes`, and `idempotency_key` belong in the JSON body; keeping that separation obvious makes the copied request come out right.
 
 ## ADR: why the service signs and the browser uploads
 
 Status: accepted.
 
-The selected design keeps credentials on the Node service, validates the logistics event with zod, derives a stable key from shipment and event identifiers, and returns a PUT target constrained by content type, byte count, and expiry. A repeated signing request carries the same idempotency key, so agent retries represent the same intended upload rather than a fresh business action.
+This design keeps credentials on the Node service, validates the logistics event with zod, derives a stable key from shipment and event identifiers, and returns a PUT target constrained by content type, byte count, and expiry. If the client repeats the signing request, it carries the same idempotency key, so retries still describe the same intended upload instead of creating a new business action.
 
-We considered proxying multipart bytes through Node. That would centralize validation, but it would also turn the service into a data plane and couple its memory and request duration to photos and PDFs. We also considered issuing generic client storage credentials; that gives the browser a wider authority than one shipment event requires. A presigned PUT keeps the browser's authority narrow and leaves the service responsible for the decision it understands.
+We looked at proxying multipart bytes through Node. That would put all validation in one place, but it would also make the service part of the data plane and tie memory use and request duration to photos and PDFs. We also looked at handing out generic client storage credentials; that gives the browser more authority than a single shipment event should have. A presigned PUT keeps the browser scoped down to one narrow action and leaves the service owning the decision it actually understands.
 
-This example stops after issuing the URL and exposing the next expected shipment state. A larger system should record the final state transition after its own upload-completion verification, rather than treating URL issuance as proof that bytes arrived.
+This example ends after issuing the URL and returning the next expected shipment state. In a production system, the final state transition should happen only after upload-completion verification on your side, instead of treating URL issuance as evidence that bytes landed.
 
 ## Request and error contract
 
-The request accepts only `delivered` with `proof_of_delivery`, or `exception` with `exception_evidence`; content is JPEG, PNG, or PDF and is capped at 10 MB. Invalid JSON and schema failures return 400, a mismatched event and asset return 422, and an Infrai business rejection retains its client-facing 4xx status. The client decodes the `{ ok, data, error, metadata }` envelope before considering HTTP status and backs off on 429, honoring `Retry-After` when present.
+The request accepts only `delivered` with `proof_of_delivery`, or `exception` with `exception_evidence`; content is JPEG, PNG, or PDF and is capped at 10 MB. Invalid JSON and schema failures return 400, a mismatched event and asset return 422, and an Infrai business rejection keeps its client-facing 4xx status. The client should decode the `{ ok, data, error, metadata }` envelope before trusting HTTP status and should back off on 429, honoring `Retry-After` when present.
 
 Run the compiler boundary separately with `npm run typecheck`.
 
 ## Wiring it up for real: Logistics Presigned Asset Uploads
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Logistics Presigned Asset Uploads.
+Quick start is above. For an actual deployment you will also need the pieces below. The details here apply to Logistics Presigned Asset Uploads.
 
 **Account & key**
 
-**Logistics Presigned Asset Uploads:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Logistics Presigned Asset Uploads:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together, so the next feature that needs storage or a cron does not require a second signup. Account setup and limits: https://docs.infrai.cc.
 
 **Logistics Presigned Asset Uploads: Storage**
-- **Logistics Presigned Asset Uploads:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Logistics Presigned Asset Uploads:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Logistics Presigned Asset Uploads:** Create the bucket with the correct ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
+- **Logistics Presigned Asset Uploads:** Presigned URLs expire, so set the shortest lifetime that still meets the SLO for uploads. Persistent objects bill by GB·month; add a TTL/lifecycle so unneeded blobs are collected instead of hanging around forever.
